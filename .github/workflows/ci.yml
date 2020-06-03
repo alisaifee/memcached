@@ -19,3 +19,19 @@ jobs:
         make -j
     - name: Test
       run: PARALLEL=5 make test
+  macos-build-test:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Install deps
+      run: |
+        brew install automake libevent perl
+    - name: Build
+      run: |
+        gcc --version
+        which aclocal
+        ./autogen.sh
+        ./configure --enable-seccomp --enable-tls --with-libssl=$(brew --prefix openssl)
+        make -j
+    - name: Test
+      run: PARALLEL=5 make test
