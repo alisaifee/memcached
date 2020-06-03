@@ -6817,42 +6817,44 @@ static enum transmit_result transmit(conn *c) {
     msg.msg_iov = iovs;
 
     iovused = _transmit_pre(c, iovs, iovused, TRANSMIT_ALL_RESP);
+    if(iovused > 0) {
+        // Alright, send.
+        ssize_t res;
+        msg.msg_iovlen = iovused;
+        res = c->sendmsg(c, &msg, 0);
+        if (res >= 0) {
+            pthread_mutex_lock(&c->thread->stats.mutex);
+            c->thread->stats.bytes_written += res;
+            pthread_mutex_unlock(&c->thread->stats.mutex);
 
-    // Alright, send.
-    ssize_t res;
-    msg.msg_iovlen = iovused;
-    res = c->sendmsg(c, &msg, 0);
-    if (res >= 0) {
-        pthread_mutex_lock(&c->thread->stats.mutex);
-        c->thread->stats.bytes_written += res;
-        pthread_mutex_unlock(&c->thread->stats.mutex);
+            // Decrement any partial IOV's and complete any finished resp's.
+            _transmit_post(c, res);
 
-        // Decrement any partial IOV's and complete any finished resp's.
-        _transmit_post(c, res);
-
-        if (c->resp_head) {
-            return TRANSMIT_INCOMPLETE;
-        } else {
-            return TRANSMIT_COMPLETE;
+            if (c->resp_head) {
+                return TRANSMIT_INCOMPLETE;
+            } else {
+                return TRANSMIT_COMPLETE;
+            }
         }
-    }
 
-    if (res == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-        if (!update_event(c, EV_WRITE | EV_PERSIST)) {
-            if (settings.verbose > 0)
-                fprintf(stderr, "Couldn't update event\n");
-            conn_set_state(c, conn_closing);
-            return TRANSMIT_HARD_ERROR;
+        if (res == -1 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            if (!update_event(c, EV_WRITE | EV_PERSIST)) {
+                if (settings.verbose > 0)
+                    fprintf(stderr, "Couldn't update event\n");
+                conn_set_state(c, conn_closing);
+                return TRANSMIT_HARD_ERROR;
+            }
+            return TRANSMIT_SOFT_ERROR;
         }
-        return TRANSMIT_SOFT_ERROR;
-    }
-    /* if res == -1 and error is not EAGAIN or EWOULDBLOCK,
-       we have a real error, on which we close the connection */
-    if (settings.verbose > 0)
-        perror("Failed to write, and not due to blocking");
+        /* if res == -1 and error is not EAGAIN or EWOULDBLOCK,
+        we have a real error, on which we close the connection */
+        if (settings.verbose > 0)
+            perror("Failed to write, and not due to blocking");
 
-    conn_set_state(c, conn_closing);
-    return TRANSMIT_HARD_ERROR;
+        conn_set_state(c, conn_closing);
+        return TRANSMIT_HARD_ERROR;
+    }
+    return TRANSMIT_COMPLETE;
 }
 
 static void build_udp_header(unsigned char *hdr, mc_resp *resp) {
